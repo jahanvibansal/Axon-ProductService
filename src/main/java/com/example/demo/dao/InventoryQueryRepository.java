@@ -8,5 +8,6 @@ import com.java.dto.Inventory;
 
 public interface InventoryQueryRepository extends MongoRepository<Inventory, String>, InventoryQueryRepsoitoryCustom{
 
+	
 	public Optional<Inventory> findByProductId(String productId);
 }

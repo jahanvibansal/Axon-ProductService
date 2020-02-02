@@ -6,7 +6,9 @@ import static org.springframework.hateoas.mvc.ControllerLinkBuilder.methodOn;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Optional;
+import java.util.stream.Collectors;
 
+import org.axonframework.eventsourcing.eventstore.EventStore;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -30,21 +32,23 @@ import com.example.demo.dao.ProductRepository;
 import com.java.dto.Inventory;
 import com.java.dto.Product;
 
-
-
 @RestController
 public class ProductRestController {
 
 	@Autowired
 	private ProductRepository productRepository;
-	@Autowired InventoryQueryRepository rep;
+	@Autowired
+	InventoryQueryRepository rep;
+	@Autowired
+	EventStore store;
 
 	private static final Logger LOGGER = LoggerFactory.getLogger(ProductRestController.class);
 
 	// ------------------- Update a Product
 	// --------------------------------------------------------
 	@RequestMapping(value = "/products/{id}", method = RequestMethod.PUT)
-	public ResponseEntity<Resource<Product>> updateProduct(@PathVariable("id") String id, @RequestBody Product product) {
+	public ResponseEntity<Resource<Product>> updateProduct(@PathVariable("id") String id,
+			@RequestBody Product product) {
 		LOGGER.debug("Updating Product with id: " + id);
 
 		Optional<Product> currentProduct = productRepository.findById(id);
@@ -53,7 +57,7 @@ public class ProductRestController {
 			LOGGER.debug("Product with id: " + id + " not found");
 			return new ResponseEntity<Resource<Product>>(HttpStatus.NOT_FOUND);
 		}
-		Product prod=currentProduct.get();
+		Product prod = currentProduct.get();
 		prod.setName(product.getName());
 		prod.setCode(product.getCode());
 		prod.setTitle(product.getTitle());
@@ -102,12 +106,15 @@ public class ProductRestController {
 			LOGGER.debug("Product with id " + id + " not found");
 			return new ResponseEntity<Resource<Product>>(HttpStatus.NOT_FOUND);
 		}
-		Product prod= product.get();
-		Resource<Product> productRes = new Resource<Product>(prod,new Link[]{linkTo(methodOn(ProductRestController.class).getProduct(prod.getId())).withSelfRel()
-				,linkTo(ProductRestController.class).slash("productImg").slash(prod.getImgUrl()).withRel("imgUrl")
-		});
-		Optional<Inventory> i=rep.findByProductId(id);
+		Product prod = product.get();
+		Resource<Product> productRes = new Resource<Product>(prod, new Link[] {
+				linkTo(methodOn(ProductRestController.class).getProduct(prod.getId())).withSelfRel(),
+				linkTo(ProductRestController.class).slash("productImg").slash(prod.getImgUrl()).withRel("imgUrl") });
+		Optional<Inventory> i = rep.findByProductId(id);
 		System.out.println(i.get().getQuantity());
+		System.out.println(store.readEvents(i.get().getInventoryId()).asStream().map(s -> s.getPayload())
+				.collect(Collectors.toList()));
+
 		return new ResponseEntity<Resource<Product>>(productRes, HttpStatus.OK);
 	}
 
@@ -119,10 +126,11 @@ public class ProductRestController {
 		LOGGER.debug("ProductRestController.getAllProducts : Start");
 		List<Product> products = productRepository.findAll();
 		Link links[] = { linkTo(methodOn(ProductRestController.class).getAllProducts()).withSelfRel(),
-				linkTo(methodOn(ProductRestController.class).getAllProducts()).withRel("getAllProducts")
-				,linkTo(methodOn(ProductRestController.class).getAllProductsByCategory("")).withRel("getAllProductsByCategory")
-				,linkTo(methodOn(ProductRestController.class).getAllProductsByName("")).withRel("getAllProductsByName")
-				};
+				linkTo(methodOn(ProductRestController.class).getAllProducts()).withRel("getAllProducts"),
+				linkTo(methodOn(ProductRestController.class).getAllProductsByCategory(""))
+						.withRel("getAllProductsByCategory"),
+				linkTo(methodOn(ProductRestController.class).getAllProductsByName(""))
+						.withRel("getAllProductsByName") };
 		if (products.isEmpty()) {
 			LOGGER.debug("ProductRestController.getAllProducts : products.isEmpty()...");
 			return new ResponseEntity<Resources<Resource<Product>>>(HttpStatus.NOT_FOUND);
@@ -163,54 +171,58 @@ public class ProductRestController {
 
 	// ------------------- Retreive all Products by category
 	// --------------------------------------------------------
-	@RequestMapping(value = "/productsByCategory", method = RequestMethod.GET, produces = { MediaType.APPLICATION_JSON_VALUE })
-	public ResponseEntity<Resources<Resource<Product>>> getAllProductsByCategory(@RequestParam("category") String category) {
+	@RequestMapping(value = "/productsByCategory", method = RequestMethod.GET, produces = {
+			MediaType.APPLICATION_JSON_VALUE })
+	public ResponseEntity<Resources<Resource<Product>>> getAllProductsByCategory(
+			@RequestParam("category") String category) {
 
-			LOGGER.debug("ProductRestController.getAllProductsByCategory : Start with param "+category);
-			List<Product> products = productRepository.findByProductCategoryName(category);
-			Link links[] = {
-					//	linkTo(methodOn(ProductRestController.class)).slash("/products/category/").withSelfRel()
-					};
-			if (products.isEmpty()) {
-				LOGGER.debug("ProductRestController.getAllProductsByCategory : products.isEmpty()...");
-				return new ResponseEntity<Resources<Resource<Product>>>(HttpStatus.NOT_FOUND);
-			}
-			List<Resource<Product>> list = new ArrayList<Resource<Product>>();
-			addLinksToProduct(products, list);
-			Resources<Resource<Product>> productRes = new Resources<Resource<Product>>(list, links);// ,
-			LOGGER.debug("ProductRestController.getAllProductsByCategory : Ending...");
-			return new ResponseEntity<Resources<Resource<Product>>>(productRes, HttpStatus.OK);
+		LOGGER.debug("ProductRestController.getAllProductsByCategory : Start with param " + category);
+		List<Product> products = productRepository.findByProductCategoryName(category);
+		Link links[] = {
+				// linkTo(methodOn(ProductRestController.class)).slash("/products/category/").withSelfRel()
+		};
+		if (products.isEmpty()) {
+			LOGGER.debug("ProductRestController.getAllProductsByCategory : products.isEmpty()...");
+			return new ResponseEntity<Resources<Resource<Product>>>(HttpStatus.NOT_FOUND);
 		}
+		List<Resource<Product>> list = new ArrayList<Resource<Product>>();
+		addLinksToProduct(products, list);
+		Resources<Resource<Product>> productRes = new Resources<Resource<Product>>(list, links);// ,
+		LOGGER.debug("ProductRestController.getAllProductsByCategory : Ending...");
+		return new ResponseEntity<Resources<Resource<Product>>>(productRes, HttpStatus.OK);
+	}
 
 	private void addLinksToProduct(List<Product> products, List<Resource<Product>> list) {
 		for (Product product : products) {
 			list.add(new Resource<Product>(product,
-					new Link[]{linkTo(methodOn(ProductRestController.class).getProduct(product.getId())).withSelfRel()
-							,linkTo(ProductRestController.class).slash("productImg").slash(product.getImgUrl()).withRel("imgUrl")
-					}));
+					new Link[] {
+							linkTo(methodOn(ProductRestController.class).getProduct(product.getId())).withSelfRel(),
+							linkTo(ProductRestController.class).slash("productImg").slash(product.getImgUrl())
+									.withRel("imgUrl") }));
 		}
 	}
 
 	// ------------------- Retreive all Products by name like % %
 	// --------------------------------------------------------
-		@RequestMapping(value = "/productsByName", method = RequestMethod.GET, produces = { MediaType.APPLICATION_JSON_VALUE })
-		public ResponseEntity<Resources<Resource<Product>>> getAllProductsByName(@RequestParam("name") String name) {
+	@RequestMapping(value = "/productsByName", method = RequestMethod.GET, produces = {
+			MediaType.APPLICATION_JSON_VALUE })
+	public ResponseEntity<Resources<Resource<Product>>> getAllProductsByName(@RequestParam("name") String name) {
 
-				LOGGER.debug("ProductRestController.getAllProductsByName : Start with param "+name);
-				List<Product> products = productRepository.findByNameRegex(name);
-				Link links[] = {
-						//	linkTo(methodOn(ProductRestController.class)).slash("/products/category/").withSelfRel()
-						};
-				if (products.isEmpty()) {
-					LOGGER.debug("ProductRestController.getAllProductsByName : products.isEmpty()...");
-					return new ResponseEntity<Resources<Resource<Product>>>(HttpStatus.NOT_FOUND);
-				}
-				List<Resource<Product>> list = new ArrayList<Resource<Product>>();
-				addLinksToProduct(products, list);
-				Resources<Resource<Product>> productRes = new Resources<Resource<Product>>(list, links);// ,
-				LOGGER.debug("ProductRestController.getAllProductsByName : Ending...");
-				return new ResponseEntity<Resources<Resource<Product>>>(productRes, HttpStatus.OK);
-			}
+		LOGGER.debug("ProductRestController.getAllProductsByName : Start with param " + name);
+		List<Product> products = productRepository.findByNameRegex(name);
+		Link links[] = {
+				// linkTo(methodOn(ProductRestController.class)).slash("/products/category/").withSelfRel()
+		};
+		if (products.isEmpty()) {
+			LOGGER.debug("ProductRestController.getAllProductsByName : products.isEmpty()...");
+			return new ResponseEntity<Resources<Resource<Product>>>(HttpStatus.NOT_FOUND);
+		}
+		List<Resource<Product>> list = new ArrayList<Resource<Product>>();
+		addLinksToProduct(products, list);
+		Resources<Resource<Product>> productRes = new Resources<Resource<Product>>(list, links);// ,
+		LOGGER.debug("ProductRestController.getAllProductsByName : Ending...");
+		return new ResponseEntity<Resources<Resource<Product>>>(productRes, HttpStatus.OK);
+	}
 	// ------------------- Retreiving product image
 	// --------------------------------------------------------
 
